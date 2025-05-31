@@ -1,134 +1,178 @@
-import { useEffect, useState } from 'react'
+// App.tsx
+import React, { useEffect, useState } from 'react'
+import {
+  Container,
+  Typography,
+  Paper,
+  List,
+  ListItem,
+  ListItemText,
+  CircularProgress,
+  Box,
+} from '@mui/material'
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend, ResponsiveContainer } from 'recharts'
 
-interface DadosHistoricos {
-  historico: {
+interface DadosClimaticos {
+  daily: {
     time: string[]
-    precipitation_sum: number[]
-  }
-  previsao: {
-    time: string[]
-    precipitation: number[]
-    temperature_2m: number[]
+    precipitation_sum: (number | null)[]
+    temperature_2m_max: (number | null)[]
+    temperature_2m_min: (number | null)[]
   }
 }
 
 interface DadosAtuais {
   time: string
   temperature: number
-  precipitation?: number
   windspeed: number
   winddirection: number
+  interval: number
+  is_day: number
+  weathercode: number
 }
 
-function App() {
-  const [dados, setDados] = useState<DadosHistoricos | null>(null)
+const App: React.FC = () => {
+  const [dadosClimaticos, setDadosClimaticos] = useState<DadosClimaticos | null>(null)
   const [dadosAtuais, setDadosAtuais] = useState<DadosAtuais | null>(null)
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
 
-  // Busca dados históricos e previsão só 1 vez
   useEffect(() => {
-    fetch('http://localhost:3001/dados-climaticos')
-      .then((res) => res.json())
-      .then((data: DadosHistoricos) => {
-        setDados(data)
-        setCarregando(false)
-      })
-      .catch(() => {
+    async function fetchDadosClimaticos() {
+      try {
+        const res = await fetch('http://localhost:3001/dados-climaticos')
+        if (!res.ok) throw new Error('Erro ao buscar dados climáticos')
+        const data: DadosClimaticos = await res.json()
+        setDadosClimaticos(data)
+      } catch {
         setErro('Erro ao carregar dados históricos')
+      } finally {
         setCarregando(false)
-      })
+      }
+    }
+    fetchDadosClimaticos()
   }, [])
 
-  // Busca dados atuais a cada 60 segundos
   useEffect(() => {
-    const buscarDadosAtuais = () => {
-      fetch('http://localhost:3001/dados-atuais')
-        .then((res) => res.json())
-        .then((data: DadosAtuais) => setDadosAtuais(data))
-        .catch(() => setDadosAtuais(null))
+    async function fetchDadosAtuais() {
+      try {
+        const res = await fetch('http://localhost:3001/dados-atuais')
+        if (!res.ok) throw new Error('Erro ao buscar dados atuais')
+        const data: DadosAtuais = await res.json()
+        setDadosAtuais(data)
+      } catch {
+        setDadosAtuais(null)
+      }
     }
-
-    buscarDadosAtuais()
-    const intervalo = setInterval(buscarDadosAtuais, 60000)
-
+    fetchDadosAtuais()
+    const intervalo = setInterval(fetchDadosAtuais, 60000)
     return () => clearInterval(intervalo)
   }, [])
 
-  if (carregando) return <div>Carregando dados...</div>
-  if (erro) return <div>{erro}</div>
-  if (!dados) return <div>Sem dados históricos</div>
+  if (carregando)
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', mt: 5 }}>
+        <CircularProgress />
+      </Box>
+    )
 
-  const dadosHistoricos = dados.historico.time.map((time, i) => ({
-    data: time,
-    precipitacao: dados.historico.precipitation_sum[i],
-  }))
+  if (erro)
+    return (
+      <Container sx={{ mt: 5 }}>
+        <Typography color='error'>{erro}</Typography>
+      </Container>
+    )
 
-  const dadosPrevisao = dados.previsao.time.map((time, i) => ({
-    data: time,
-    precipitacao: dados.previsao.precipitation[i],
-    temperatura: dados.previsao.temperature_2m[i],
+  if (!dadosClimaticos)
+    return (
+      <Container sx={{ mt: 5 }}>
+        <Typography>Dados climáticos indisponíveis</Typography>
+      </Container>
+    )
+
+  // Preparar dados para gráfico
+  const dadosHistoricos = dadosClimaticos.daily.time.map((data, i) => ({
+    data,
+    precipitacao: dadosClimaticos.daily.precipitation_sum[i] ?? 0,
+    temp_max: dadosClimaticos.daily.temperature_2m_max[i] ?? 0,
+    temp_min: dadosClimaticos.daily.temperature_2m_min[i] ?? 0,
   }))
 
   return (
-    <div style={{ padding: 20 }}>
-      <h1>Dashboard Climático - São Paulo</h1>
+    <Container sx={{ mt: 4, mb: 4, fontFamily: "'Roboto', sans-serif" }}>
+      <Typography variant='h4' gutterBottom textAlign='center'>
+        Dashboard Climático - São Paulo
+      </Typography>
 
-      <section>
-        <h2>Dados Atuais (atualiza a cada 1 minuto)</h2>
+      <Paper sx={{ p: 3, mb: 5 }}>
+        <Typography variant='h6' gutterBottom>
+          Dados Atuais (atualiza a cada 1 minuto)
+        </Typography>
         {dadosAtuais ? (
-          <ul>
-            <li>
-              <strong>Hora:</strong> {dadosAtuais.time}
-            </li>
-            <li>
-              <strong>Temperatura:</strong> {dadosAtuais.temperature} °C
-            </li>
-            <li>
-              <strong>Precipitação:</strong> {dadosAtuais.precipitation ?? '0'} mm
-            </li>
-            <li>
-              <strong>Velocidade do Vento:</strong> {dadosAtuais.windspeed} km/h
-            </li>
-            <li>
-              <strong>Direção do Vento:</strong> {dadosAtuais.winddirection}°
-            </li>
-          </ul>
+          <List>
+            <ListItem>
+              <ListItemText primary='Hora' secondary={new Date(dadosAtuais.time).toLocaleString()} />
+            </ListItem>
+            <ListItem>
+              <ListItemText primary='Temperatura' secondary={`${dadosAtuais.temperature.toFixed(1)} °C`} />
+            </ListItem>
+            <ListItem>
+              <ListItemText primary='Velocidade do Vento' secondary={`${dadosAtuais.windspeed} km/h`} />
+            </ListItem>
+            <ListItem>
+              <ListItemText primary='Direção do Vento' secondary={`${dadosAtuais.winddirection}°`} />
+            </ListItem>
+          </List>
         ) : (
-          <p>Dados atuais indisponíveis</p>
+          <Typography>Dados atuais indisponíveis</Typography>
         )}
-      </section>
+      </Paper>
 
-      <section>
-        <h2>Precipitação Histórica (últimos 90 dias)</h2>
-        <ResponsiveContainer width='100%' height={300}>
+      <Paper sx={{ p: 3, mb: 4 }}>
+        <Typography variant='h6' gutterBottom>
+          Precipitação Histórica (últimos 8 dias)
+        </Typography>
+        <ResponsiveContainer width='100%' height={320}>
           <LineChart data={dadosHistoricos}>
             <CartesianGrid strokeDasharray='3 3' />
-            <XAxis dataKey='data' />
+            <XAxis dataKey='data' tickFormatter={(str) => new Date(str).toLocaleDateString()} />
             <YAxis />
-            <Tooltip />
+            <Tooltip
+              labelFormatter={(label) => `Data: ${new Date(label).toLocaleDateString()}`}
+              formatter={(value: number, name: string) => [
+                `${value}`,
+                name === 'precipitacao' ? 'Precipitação (mm)' : name,
+              ]}
+            />
             <Legend />
-            <Line type='monotone' dataKey='precipitacao' stroke='#8884d8' name='Precipitação (mm)' />
+            <Line
+              type='monotone'
+              dataKey='precipitacao'
+              stroke='#1976d2'
+              name='Precipitação (mm)'
+              strokeWidth={2}
+              dot={{ r: 3 }}
+            />
+            <Line
+              type='monotone'
+              dataKey='temp_max'
+              stroke='#ef5350'
+              name='Temperatura Máx (°C)'
+              strokeWidth={2}
+              dot={{ r: 3 }}
+            />
+            <Line
+              type='monotone'
+              dataKey='temp_min'
+              stroke='#42a5f5'
+              name='Temperatura Mín (°C)'
+              strokeWidth={2}
+              dot={{ r: 3 }}
+            />
           </LineChart>
         </ResponsiveContainer>
-      </section>
-
-      <section style={{ marginTop: 40 }}>
-        <h2>Previsão de Precipitação (próximas 72h)</h2>
-        <ResponsiveContainer width='100%' height={300}>
-          <LineChart data={dadosPrevisao}>
-            <CartesianGrid strokeDasharray='3 3' />
-            <XAxis dataKey='data' />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            <Line type='monotone' dataKey='precipitacao' stroke='#82ca9d' name='Precipitação (mm)' />
-            <Line type='monotone' dataKey='temperatura' stroke='#ff7300' name='Temperatura (°C)' />
-          </LineChart>
-        </ResponsiveContainer>
-      </section>
-    </div>
+      </Paper>
+    </Container>
   )
 }
 
