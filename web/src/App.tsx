@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import {
   Container,
   Typography,
@@ -9,26 +9,27 @@ import {
   CircularProgress,
   Box,
   Chip,
-  Divider,
 } from '@mui/material'
+
 import {
   LineChart,
   Line,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
-  Tooltip,
   CartesianGrid,
+  Tooltip,
   Legend,
   ResponsiveContainer,
-  ReferenceDot,
 } from 'recharts'
 
 interface DadosClimaticos {
   daily: {
     time: string[]
-    precipitation_sum: (number | null)[]
-    temperature_2m_max: (number | null)[]
-    temperature_2m_min: (number | null)[]
+    precipitation_sum?: (number | null)[]
+    temperature_2m_max?: (number | null)[]
+    temperature_2m_min?: (number | null)[]
   }
 }
 
@@ -44,9 +45,10 @@ interface DadosAtuais {
 }
 
 type EventoExtremo = {
-  type: 'Temperatura Máxima Alta' | 'Temperatura Mínima Baixa' | 'Chuva Forte'
+  type: string
   data: string
   valor: number
+  fonte: 'Histórico' | 'Previsão' | 'Atual'
 }
 
 const LIMITE_CHUVA = 20 // mm
@@ -56,85 +58,80 @@ const LIMITE_TEMP_MIN = 5 // °C
 const App: React.FC = () => {
   const [dadosClimaticos, setDadosClimaticos] = useState<DadosClimaticos | null>(null)
   const [dadosAtuais, setDadosAtuais] = useState<DadosAtuais | null>(null)
+  const [previsaoTempo, setPrevisaoTempo] = useState<DadosClimaticos | null>(null)
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
 
   useEffect(() => {
-    async function fetchDadosClimaticos() {
+    async function fetchDados() {
       try {
-        const res = await fetch('http://localhost:3001/dados-climaticos')
-        if (!res.ok) throw new Error('Erro ao buscar dados climáticos')
-        const data: DadosClimaticos = await res.json()
-        setDadosClimaticos(data)
-      } catch {
-        setErro('Erro ao carregar dados históricos')
+        const [resHist, resAtuais, resPrev] = await Promise.all([
+          fetch('http://localhost:3001/dados-climaticos'),
+          fetch('http://localhost:3001/dados-atuais'),
+          fetch('http://localhost:3001/previsao-tempo'),
+        ])
+
+        if (!resHist.ok) throw new Error('Erro dados climáticos históricos')
+        if (!resAtuais.ok) throw new Error('Erro dados atuais')
+        if (!resPrev.ok) throw new Error('Erro dados previsão')
+
+        const dadosHist: DadosClimaticos = await resHist.json()
+        const dadosAtu: DadosAtuais = await resAtuais.json()
+        const dadosPrev: DadosClimaticos = await resPrev.json()
+
+        setDadosClimaticos(dadosHist)
+        setDadosAtuais(dadosAtu)
+        setPrevisaoTempo(dadosPrev)
+      } catch (e: any) {
+        setErro(e.message)
       } finally {
         setCarregando(false)
       }
     }
-    fetchDadosClimaticos()
-  }, [])
-
-  useEffect(() => {
-    async function fetchDadosAtuais() {
-      try {
-        const res = await fetch('http://localhost:3001/dados-atuais')
-        if (!res.ok) throw new Error('Erro ao buscar dados atuais')
-        const data: DadosAtuais = await res.json()
-        setDadosAtuais(data)
-      } catch {
-        setDadosAtuais(null)
-      }
-    }
-    fetchDadosAtuais()
-    const intervalo = setInterval(fetchDadosAtuais, 60000)
+    fetchDados()
+    const intervalo = setInterval(fetchDados, 60000)
     return () => clearInterval(intervalo)
   }, [])
 
-  // Preparar dados e detectar eventos extremos
-  const dadosProcessados = useMemo(() => {
-    if (!dadosClimaticos) return { dadosGrafico: [], eventos: [] as EventoExtremo[] }
-
-    const { time, precipitation_sum, temperature_2m_max, temperature_2m_min } = dadosClimaticos.daily
-
-    const dadosGrafico = time.map((data, i) => ({
-      data,
-      precipitacao: precipitation_sum[i] ?? 0,
-      temp_max: temperature_2m_max[i] ?? 0,
-      temp_min: temperature_2m_min[i] ?? 0,
-    }))
-
+  function processarEventos(daily: DadosClimaticos['daily'], fonte: EventoExtremo['fonte']): EventoExtremo[] {
     const eventos: EventoExtremo[] = []
-
-    time.forEach((data, i) => {
-      const chuva = precipitation_sum[i]
-      const tMax = temperature_2m_max[i]
-      const tMin = temperature_2m_min[i]
+    daily.time.forEach((data, i) => {
+      const chuva = daily.precipitation_sum ? daily.precipitation_sum[i] : null
+      const tMax = daily.temperature_2m_max ? daily.temperature_2m_max[i] : null
+      const tMin = daily.temperature_2m_min ? daily.temperature_2m_min[i] : null
 
       if (chuva !== null && chuva >= LIMITE_CHUVA) {
-        eventos.push({ type: 'Chuva Forte', data, valor: chuva })
+        eventos.push({ type: 'Chuva Forte', data, valor: chuva, fonte })
       }
       if (tMax !== null && tMax >= LIMITE_TEMP_MAX) {
-        eventos.push({ type: 'Temperatura Máxima Alta', data, valor: tMax })
+        eventos.push({ type: 'Temperatura Máxima Alta', data, valor: tMax, fonte })
       }
       if (tMin !== null && tMin <= LIMITE_TEMP_MIN) {
-        eventos.push({ type: 'Temperatura Mínima Baixa', data, valor: tMin })
+        eventos.push({ type: 'Temperatura Mínima Baixa', data, valor: tMin, fonte })
       }
     })
+    return eventos
+  }
 
-    return { dadosGrafico, eventos }
+  const eventosHistoricos = useMemo(() => {
+    if (!dadosClimaticos) return []
+    return processarEventos(dadosClimaticos.daily, 'Histórico')
   }, [dadosClimaticos])
 
-  // Checar se dados atuais são extremos
-  const dadosAtuaisExtremos = useMemo(() => {
-    if (!dadosAtuais) return [] as EventoExtremo[]
-    const eventos: EventoExtremo[] = []
+  const eventosPrevisao = useMemo(() => {
+    if (!previsaoTempo) return []
+    return processarEventos(previsaoTempo.daily, 'Previsão')
+  }, [previsaoTempo])
 
+  const eventosAtuais = useMemo(() => {
+    if (!dadosAtuais) return []
+    const eventos: EventoExtremo[] = []
     if (dadosAtuais.temperature >= LIMITE_TEMP_MAX) {
       eventos.push({
         type: 'Temperatura Atual Alta',
         data: dadosAtuais.time,
         valor: dadosAtuais.temperature,
+        fonte: 'Atual',
       })
     }
     if (dadosAtuais.temperature <= LIMITE_TEMP_MIN) {
@@ -142,6 +139,7 @@ const App: React.FC = () => {
         type: 'Temperatura Atual Baixa',
         data: dadosAtuais.time,
         valor: dadosAtuais.temperature,
+        fonte: 'Atual',
       })
     }
     if (dadosAtuais.precipitation !== undefined && dadosAtuais.precipitation >= LIMITE_CHUVA) {
@@ -149,10 +147,49 @@ const App: React.FC = () => {
         type: 'Chuva Atual Forte',
         data: dadosAtuais.time,
         valor: dadosAtuais.precipitation,
+        fonte: 'Atual',
       })
     }
     return eventos
   }, [dadosAtuais])
+
+  // Montar dados combinados para gráficos
+  // Mescla histórico e previsão pela data, colocando previsao depois dos históricos
+  // Prioriza dados da previsão se data coincidir
+  const dadosTemperaturaGrafico = useMemo(() => {
+    if (!dadosClimaticos || !previsaoTempo) return []
+
+    // Criar mapa data -> dados históricos
+    const mapaHist = new Map<string, any>()
+    dadosClimaticos.daily.time.forEach((d, i) => {
+      mapaHist.set(d, {
+        data: d,
+        temp_max_hist: dadosClimaticos.daily.temperature_2m_max?.[i] ?? null,
+        temp_min_hist: dadosClimaticos.daily.temperature_2m_min?.[i] ?? null,
+        precip_hist: dadosClimaticos.daily.precipitation_sum?.[i] ?? null,
+      })
+    })
+
+    // Atualizar com previsão
+    previsaoTempo.daily.time.forEach((d, i) => {
+      if (mapaHist.has(d)) {
+        const existente = mapaHist.get(d)!
+        existente.temp_max_prev = previsaoTempo.daily.temperature_2m_max?.[i] ?? null
+        existente.temp_min_prev = previsaoTempo.daily.temperature_2m_min?.[i] ?? null
+        existente.precip_prev = previsaoTempo.daily.precipitation_sum?.[i] ?? null
+      } else {
+        mapaHist.set(d, {
+          data: d,
+          temp_max_prev: previsaoTempo.daily.temperature_2m_max?.[i] ?? null,
+          temp_min_prev: previsaoTempo.daily.temperature_2m_min?.[i] ?? null,
+          precip_prev: previsaoTempo.daily.precipitation_sum?.[i] ?? null,
+        })
+      }
+    })
+
+    // Converter para array ordenado
+    return Array.from(mapaHist.values()).sort((a, b) => a.data.localeCompare(b.data))
+  }, [dadosClimaticos, previsaoTempo])
 
   if (carregando)
     return (
@@ -168,24 +205,15 @@ const App: React.FC = () => {
       </Container>
     )
 
-  if (!dadosClimaticos)
-    return (
-      <Container sx={{ mt: 5 }}>
-        <Typography>Dados climáticos indisponíveis</Typography>
-      </Container>
-    )
-
   return (
-    <Container sx={{ mt: 4, mb: 4, fontFamily: "'Roboto', sans-serif" }}>
+    <Container sx={{ mt: 4, mb: 4 }}>
       <Typography variant='h4' gutterBottom textAlign='center'>
-        Dashboard Climático - Eventos Extremos - São Paulo
+        Dashboard Climático com Previsão e Eventos Extremos
       </Typography>
 
-      <Paper sx={{ p: 3, mb: 5 }}>
-        <Typography variant='h6' gutterBottom>
-          Dados Atuais (atualiza a cada 1 minuto)
-        </Typography>
-
+      {/* Dados atuais */}
+      <Paper sx={{ p: 3, mb: 4 }}>
+        <Typography variant='h6'>Dados Atuais (Atualizado a cada 1 min)</Typography>
         {dadosAtuais ? (
           <>
             <List>
@@ -202,13 +230,10 @@ const App: React.FC = () => {
                 <ListItemText primary='Direção do Vento' secondary={`${dadosAtuais.winddirection}°`} />
               </ListItem>
             </List>
-
-            {dadosAtuaisExtremos.length > 0 && (
+            {eventosAtuais.length > 0 && (
               <Box mt={2}>
-                <Typography variant='subtitle1' color='error'>
-                  ⚠️ Eventos Climáticos Atuais Extremos:
-                </Typography>
-                {dadosAtuaisExtremos.map((evt, i) => (
+                <Typography color='error'>⚠️ Eventos Climáticos Atuais Extremos:</Typography>
+                {eventosAtuais.map((evt, i) => (
                   <Chip
                     key={i}
                     label={`${evt.type}: ${evt.valor.toFixed(1)}${
@@ -226,109 +251,105 @@ const App: React.FC = () => {
         )}
       </Paper>
 
+      {/* Gráfico Temperatura Máx e Mín */}
       <Paper sx={{ p: 3, mb: 4 }}>
-        <Typography variant='h6' gutterBottom>
-          Análise de Eventos Extremos - Últimos 90 dias
+        <Typography variant='h6' mb={2}>
+          Temperaturas Máximas e Mínimas (Histórico x Previsão)
         </Typography>
-
-        <Box mb={2}>
-          <Typography>
-            Total de eventos detectados: <strong>{dadosProcessados.eventos.length}</strong>
-          </Typography>
-          <Typography>
-            - Chuva Forte (≥ {LIMITE_CHUVA} mm):{' '}
-            <strong>{dadosProcessados.eventos.filter((e) => e.type === 'Chuva Forte').length}</strong>
-          </Typography>
-          <Typography>
-            - Temperatura Máxima Alta (≥ {LIMITE_TEMP_MAX} °C):{' '}
-            <strong>
-              {dadosProcessados.eventos.filter((e) => e.type === 'Temperatura Máxima Alta').length}
-            </strong>
-          </Typography>
-          <Typography>
-            - Temperatura Mínima Baixa (≤ {LIMITE_TEMP_MIN} °C):{' '}
-            <strong>
-              {dadosProcessados.eventos.filter((e) => e.type === 'Temperatura Mínima Baixa').length}
-            </strong>
-          </Typography>
-        </Box>
-
-        <Divider sx={{ mb: 2 }} />
-
-        <ResponsiveContainer width='100%' height={400}>
-          <LineChart data={dadosProcessados.dadosGrafico}>
+        <ResponsiveContainer width='100%' height={300}>
+          <LineChart data={dadosTemperaturaGrafico}>
             <CartesianGrid strokeDasharray='3 3' />
-            <XAxis
-              dataKey='data'
-              tickFormatter={(str) => new Date(str).toLocaleDateString()}
-              minTickGap={20}
-            />
-            <YAxis yAxisId='left' domain={['auto', 'auto']} />
-            <YAxis yAxisId='right' orientation='right' domain={[0, 'auto']} allowDecimals={false} />
-            <Tooltip
-              labelFormatter={(label) => `Data: ${new Date(label).toLocaleDateString()}`}
-              formatter={(value: number, name: string) => {
-                if (name === 'precipitacao') return [`${value} mm`, 'Precipitação']
-                if (name === 'temp_max') return [`${value} °C`, 'Temp. Máx']
-                if (name === 'temp_min') return [`${value} °C`, 'Temp. Mín']
-                return [value, name]
-              }}
-            />
+            <XAxis dataKey='data' tickFormatter={(str) => new Date(str).toLocaleDateString()} />
+            <YAxis unit='°C' />
+            <Tooltip labelFormatter={(label) => new Date(label).toLocaleDateString()} />
             <Legend />
-
-            {/* Linha temperatura máxima */}
             <Line
-              yAxisId='left'
               type='monotone'
-              dataKey='temp_max'
-              stroke='#d32f2f'
-              name='Temperatura Máx (°C)'
-              strokeWidth={2}
+              dataKey='temp_max_hist'
+              stroke='#ff7300'
+              name='Temp Máx Histórico'
               dot={false}
             />
-            {/* Linha temperatura mínima */}
             <Line
-              yAxisId='left'
               type='monotone'
-              dataKey='temp_min'
-              stroke='#1976d2'
-              name='Temperatura Mín (°C)'
-              strokeWidth={2}
+              dataKey='temp_min_hist'
+              stroke='#387908'
+              name='Temp Mín Histórico'
               dot={false}
             />
-            {/* Linha precipitação */}
             <Line
-              yAxisId='right'
               type='monotone'
-              dataKey='precipitacao'
-              stroke='#388e3c'
-              name='Precipitação (mm)'
-              strokeWidth={2}
+              dataKey='temp_max_prev'
+              stroke='#8884d8'
+              name='Temp Máx Previsão'
+              strokeDasharray='5 5'
               dot={false}
             />
-
-            {/* Pontos eventos extremos */}
-            {dadosProcessados.eventos.map((evt, i) => {
-              let yValue = evt.valor
-              if (evt.type === 'Chuva Forte') yValue = evt.valor
-              if (evt.type === 'Temperatura Máxima Alta') yValue = evt.valor
-              if (evt.type === 'Temperatura Mínima Baixa') yValue = evt.valor
-              // colocar o ponto vermelho para eventos extremos
-              return (
-                <ReferenceDot
-                  key={i}
-                  x={evt.data}
-                  y={yValue}
-                  yAxisId={evt.type === 'Chuva Forte' ? 'right' : 'left'}
-                  r={6}
-                  fill='red'
-                  stroke='none'
-                  label={{ position: 'top', value: '⚠️', fill: 'red' }}
-                />
-              )
-            })}
+            <Line
+              type='monotone'
+              dataKey='temp_min_prev'
+              stroke='#82ca9d'
+              name='Temp Mín Previsão'
+              strokeDasharray='5 5'
+              dot={false}
+            />
           </LineChart>
         </ResponsiveContainer>
+      </Paper>
+
+      {/* Gráfico Precipitação */}
+      <Paper sx={{ p: 3, mb: 4 }}>
+        <Typography variant='h6' mb={2}>
+          Precipitação Diária (Histórico x Previsão)
+        </Typography>
+        <ResponsiveContainer width='100%' height={250}>
+          <BarChart data={dadosTemperaturaGrafico}>
+            <CartesianGrid strokeDasharray='3 3' />
+            <XAxis dataKey='data' tickFormatter={(str) => new Date(str).toLocaleDateString()} />
+            <YAxis unit='mm' />
+            <Tooltip labelFormatter={(label) => new Date(label).toLocaleDateString()} />
+            <Legend />
+            <Bar dataKey='precip_hist' fill='#8884d8' name='Precipitação Histórica' maxBarSize={30} />
+            <Bar dataKey='precip_prev' fill='#82ca9d' name='Precipitação Previsão' maxBarSize={30} />
+          </BarChart>
+        </ResponsiveContainer>
+      </Paper>
+
+      {/* Histórico */}
+      <Paper sx={{ p: 3, mb: 4 }}>
+        <Typography variant='h6'>Eventos Extremos - Histórico (Últimos 90 dias)</Typography>
+        <Typography>Total eventos: {eventosHistoricos.length}</Typography>
+        <List dense>
+          {eventosHistoricos.map((evt, i) => (
+            <ListItem key={i}>
+              <ListItemText
+                primary={`${evt.type} em ${new Date(evt.data).toLocaleDateString()}`}
+                secondary={`Valor: ${evt.valor.toFixed(1)}${evt.type.includes('Chuva') ? ' mm' : ' °C'}`}
+              />
+            </ListItem>
+          ))}
+        </List>
+      </Paper>
+
+      {/* Previsão */}
+      <Paper sx={{ p: 3, mb: 4 }}>
+        <Typography variant='h6'>Eventos Extremos - Previsão</Typography>
+        {eventosPrevisao.length === 0 ? (
+          <Typography>Nenhum evento extremo previsto.</Typography>
+        ) : (
+          <List dense>
+            {eventosPrevisao.map((evt, i) => (
+              <ListItem key={i}>
+                <ListItemText
+                  primary={`${evt.type} previsto para ${new Date(evt.data).toLocaleDateString()}`}
+                  secondary={`Valor previsto: ${evt.valor.toFixed(1)}${
+                    evt.type.includes('Chuva') ? ' mm' : ' °C'
+                  }`}
+                />
+              </ListItem>
+            ))}
+          </List>
+        )}
       </Paper>
     </Container>
   )
